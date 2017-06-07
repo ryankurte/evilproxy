@@ -1,15 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/jessevdk/go-flags"
 
 	"github.com/ryankurte/experiments/evilproxy/plugins"
-	"io/ioutil"
-	"strings"
 )
 
 type Config struct {
@@ -20,73 +22,99 @@ type Config struct {
 }
 
 type Proxy struct {
-	address, port    string
-	bindAddress      string
-	requestHandlers  []plugins.RequestHandler
-	responseHandlers []plugins.ResponseHandler
+	plugins.PluginManager
+	address, port string
+	bindAddress   string
 }
 
 func NewProxy(address, port string) *Proxy {
 	p := Proxy{
-		address:          address,
-		port:             port,
-		bindAddress:      fmt.Sprintf("%s:%s", address, port),
-		requestHandlers:  make([]plugins.RequestHandler, 0),
-		responseHandlers: make([]plugins.ResponseHandler, 0),
+		address:       address,
+		port:          port,
+		bindAddress:   fmt.Sprintf("%s:%s", address, port),
+		PluginManager: plugins.PluginManager{},
 	}
 	return &p
 }
 
-func (p *Proxy) BindPlugin(handler interface{}) {
-	if reqHandler, ok := handler.(plugins.RequestHandler); ok {
-		p.requestHandlers = append(p.requestHandlers, reqHandler)
-	}
-	if respHandler, ok := handler.(plugins.ResponseHandler); ok {
-		p.responseHandlers = append(p.responseHandlers, respHandler)
-	}
+func buildURI(protocol, address, port string) string {
+	return fmt.Sprintf("%s-%s-%s", protocol, address, port)
 }
 
-func (p *Proxy) handler(w http.ResponseWriter, r *http.Request) {
-	queryURI, host, from := r.RequestURI, r.Host, r.RemoteAddr
+func parseURI(uri string) (protocol, address, port string) {
+	protocol, address, port = "https", uri, "443"
+
+	s := strings.Split(uri, ".")
+	idx := 1
+
+	_, err := strconv.Atoi(s[len(s)-idx])
+	if err == nil {
+		port = s[len(s)-1]
+		address = strings.Replace(address, "."+port, "", -1)
+		idx++
+	}
+
+	if s[len(s)-idx] == "http" {
+		protocol = "http"
+		address = strings.Replace(address, ".http", "", -1)
+	}
+
+	return protocol, address, port
+}
+
+func (p *Proxy) wrapRequest(req *http.Request) (*http.Request, error) {
+	queryURI, host, from := req.RequestURI, req.Host, req.RemoteAddr
 
 	log.Printf("Request from: %s for host %s with query %s", from, host, queryURI)
 
 	baseURL := strings.Replace(host, "."+p.bindAddress, "", -1)
-	proxyURL := fmt.Sprintf("https://%s%s", baseURL, queryURI)
+	protocol, url, port := parseURI(baseURL)
 
-	// Create a new (proxied) request object
-	proxyReq, err := http.NewRequest(r.Method, proxyURL, r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		log.Printf("Error creating proxied request: %s", err)
-		return
+	proxyURL := fmt.Sprintf("%s://%s:%s%s", protocol, url, port, queryURI)
+
+	// Process and update request components
+	//processedHeader := p.ProcessRequestHeader(&r.Header)
+	//proxyReq.Header = *processedHeader
+	if req.Body == nil {
+		return http.NewRequest(req.Method, proxyURL, nil)
 	}
 
-	for _, h := range p.requestHandlers {
-		h.ProcessRequest(proxyReq)
+	requestBody, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		return http.NewRequest(req.Method, proxyURL, nil)
+	}
+
+	processedBody := p.ProcessRequestBody(requestBody)
+	return http.NewRequest(req.Method, proxyURL, bytes.NewReader(processedBody))
+}
+
+func (p *Proxy) handler(wr http.ResponseWriter, req *http.Request) {
+
+	// Create a new (proxied) request object
+	proxyReq, err := p.wrapRequest(req)
+	if err != nil {
+		wr.WriteHeader(http.StatusBadRequest)
+		log.Printf("Error creating proxied request: %s", err)
+		return
 	}
 
 	// Execute proxied request
 	resp, err := http.DefaultClient.Do(proxyReq)
 	if err != nil {
-		w.WriteHeader(http.StatusBadGateway)
+		wr.WriteHeader(http.StatusBadGateway)
 		log.Printf("Error calling proxied server: %s", err)
 		return
 	}
 
-	// Todo: call response handlers
-	for _, h := range p.responseHandlers {
-		h.ProcessResponse(resp)
-	}
+	// Process and update response components
+	processedResponseHeader := p.ProcessResponseHeader(&resp.Header)
+	resp.Header = *processedResponseHeader
+	responseBody, _ := ioutil.ReadAll(resp.Body)
+	processedResponseBody := p.ProcessResponseBody(responseBody)
 
-	// Read and return response
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Error loading response body %s", err)
-		return
-	}
-	w.WriteHeader(resp.StatusCode)
-	w.Write(body)
+	// Write processed response
+	wr.WriteHeader(resp.StatusCode)
+	wr.Write(processedResponseBody)
 
 }
 
@@ -109,7 +137,7 @@ func main() {
 
 	p := NewProxy(c.Address, c.Port)
 
-	p.BindPlugin(plugins.NewCORSPlugin("*"))
+	//p.Bind(plugins.NewCORSPlugin("*"))
 
 	p.Run()
 }
