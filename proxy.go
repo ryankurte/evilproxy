@@ -52,7 +52,7 @@ func (p *Proxy) handler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Request from: %s for host %s with query %s", from, host, queryURI)
 
 	baseURL := strings.Replace(host, "."+p.bindAddress, "", -1)
-	proxyURL := fmt.Sprintf("https://%s/%s", baseURL, queryURI)
+	proxyURL := fmt.Sprintf("https://%s%s", baseURL, queryURI)
 
 	// Create a new (proxied) request object
 	proxyReq, err := http.NewRequest(r.Method, proxyURL, r.Body)
@@ -108,6 +108,8 @@ func main() {
 	flags.Parse(&c)
 
 	p := NewProxy(c.Address, c.Port)
+
+	p.BindPlugin(plugins.NewCORSPlugin("*"))
 
 	p.Run()
 }
