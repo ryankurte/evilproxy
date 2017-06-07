@@ -1,5 +1,7 @@
-package plugins
+/**
+ * Logger logs proxied methods for future analysis
+ *
+ * Copyright 2017 Ryan Kurte
+ */
 
-import (
-	"fmt"
-)
+package plugins
