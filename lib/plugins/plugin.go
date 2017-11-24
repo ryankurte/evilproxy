@@ -13,24 +13,25 @@ import (
 
 // RequestHeaderHandler interface implemented by plugins that re-write request headers
 type RequestHeaderHandler interface {
-	ProcessRequestHeader(req *http.Header) *http.Header
+	ProcessRequestHeader(ctx interface{}, req http.Header) http.Header
 }
 
 // RequestBodyHandler interface implemented by plugins that re-write the request body
 type RequestBodyHandler interface {
-	ProcessRequestBody(req []byte) []byte
+	ProcessRequestBody(ctx interface{}, req string) string
 }
 
-// ResponseHandler interface implemented by plugins that re-writes the response body
+// ResponseHeaderHandler interface implemented by plugins that re-writes the response header
 type ResponseHeaderHandler interface {
-	ProcessResponseHeader(*http.Header) *http.Header
+	ProcessResponseHeader(ctx interface{}, resp http.Header) http.Header
 }
 
-// ResponseHandler interface implemented by plugins that re-writes the response body
+// ResponseBodyHandler interface implemented by plugins that re-writes the response body
 type ResponseBodyHandler interface {
-	ProcessResponseBody([]byte) []byte
+	ProcessResponseBody(ctx interface{}, resp string) string
 }
 
+// PluginManager wraps plugin types and calls each sequentially when the appropriate method is called
 type PluginManager struct {
 	RequestHeaderHandlers  []RequestHeaderHandler
 	RequestBodyHandlers    []RequestBodyHandler
@@ -38,6 +39,7 @@ type PluginManager struct {
 	ResponseBodyHandlers   []ResponseBodyHandler
 }
 
+// Bind attaches a plugin to the PluginManager
 func (pm *PluginManager) Bind(handler interface{}) {
 	if r, ok := handler.(RequestHeaderHandler); ok {
 		pm.RequestHeaderHandlers = append(pm.RequestHeaderHandlers, r)
@@ -53,30 +55,34 @@ func (pm *PluginManager) Bind(handler interface{}) {
 	}
 }
 
-func (pm *PluginManager) ProcessRequestHeader(req *http.Header) *http.Header {
+// ProcessRequestHeader processes a request header through the bound plugins
+func (pm *PluginManager) ProcessRequestHeader(ctx interface{}, req http.Header) http.Header {
 	for _, h := range pm.RequestHeaderHandlers {
-		req = h.ProcessRequestHeader(req)
+		req = h.ProcessRequestHeader(ctx, req)
 	}
 	return req
 }
 
-func (pm *PluginManager) ProcessRequestBody(req []byte) []byte {
+// ProcessRequestBody processes a request body through the bound plugins
+func (pm *PluginManager) ProcessRequestBody(ctx interface{}, req string) string {
 	for _, h := range pm.RequestBodyHandlers {
-		req = h.ProcessRequestBody(req)
+		req = h.ProcessRequestBody(ctx, req)
 	}
 	return req
 }
 
-func (pm *PluginManager) ProcessResponseHeader(resp *http.Header) *http.Header {
+// ProcessResponseHeader processes a response header through bound plugins
+func (pm *PluginManager) ProcessResponseHeader(ctx interface{}, resp http.Header) http.Header {
 	for _, h := range pm.ResponseHeaderHandlers {
-		resp = h.ProcessResponseHeader(resp)
+		resp = h.ProcessResponseHeader(ctx, resp)
 	}
 	return resp
 }
 
-func (pm *PluginManager) ProcessResponseBody(resp []byte) []byte {
+// ProcessResponseBody processes a response body through bound plugins
+func (pm *PluginManager) ProcessResponseBody(ctx interface{}, resp string) string {
 	for _, h := range pm.ResponseBodyHandlers {
-		resp = h.ProcessResponseBody(resp)
+		resp = h.ProcessResponseBody(ctx, resp)
 	}
 	return resp
 }
