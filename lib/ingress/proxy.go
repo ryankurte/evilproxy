@@ -6,5 +6,5 @@ import (
 
 // Proxy interface wrapped by ingress module
 type Proxy interface {
-	HandleRequest(*http.Request) *http.Response
+	HandleRequest(*http.Request) (*http.Response, error)
 }

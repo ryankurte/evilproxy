@@ -62,6 +62,8 @@ func (h *HTTPFrontend) encodeURI(protocol, address, port string) string {
 func (h *HTTPFrontend) wrapRequest(req *http.Request) (*http.Request, error) {
 	queryURI, host := req.RequestURI, req.Host
 
+	log.Printf("Query: %s Host: %s", queryURI, host)
+
 	baseURL := strings.Replace(host, "."+h.bindAddress, "", -1)
 	protocol, url, port := h.decodeURI(baseURL)
 
@@ -91,7 +93,12 @@ func (h *HTTPFrontend) handler(wr http.ResponseWriter, req *http.Request) {
 	}
 
 	// Process request via proxy interface
-	proxyResp := h.HandleRequest(proxyReq)
+	proxyResp, err := h.HandleRequest(proxyReq)
+	if err != nil {
+		wr.WriteHeader(http.StatusBadGateway)
+		log.Printf("Error proxying resquest: %s", err)
+		return
+	}
 
 	// Wrap response object from backend to frontend
 	resp, err := h.wrapResponse(proxyResp)
@@ -133,7 +140,5 @@ func (h *HTTPFrontend) Run() {
 }
 
 func (h *HTTPFrontend) Stop() {
-	if err := h.srv.Shutdown(nil); err != nil {
-		panic(err)
-	}
+	h.srv.Shutdown(nil)
 }

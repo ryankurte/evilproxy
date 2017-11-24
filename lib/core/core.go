@@ -41,7 +41,7 @@ func (p *Proxy) BindBackend(b Backend) {
 }
 
 // HandleRequest routes a request through the proxy and returns a response
-func (p *Proxy) HandleRequest(req *http.Request) *http.Response {
+func (p *Proxy) HandleRequest(req *http.Request) (*http.Response, error) {
 
 	ctx := int(0)
 
@@ -63,7 +63,7 @@ func (p *Proxy) HandleRequest(req *http.Request) *http.Response {
 	resp, err := p.backend.Request(ctx, req)
 	if err != nil {
 		log.Printf("Error making backend request %s", err)
-		return nil
+		return nil, err
 	}
 
 	// Process response headers
@@ -80,5 +80,5 @@ func (p *Proxy) HandleRequest(req *http.Request) *http.Response {
 		}
 	}
 
-	return resp
+	return resp, nil
 }
