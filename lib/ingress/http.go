@@ -35,22 +35,25 @@ func (h *HTTPFrontend) BindProxy(p Proxy) {
 func (h *HTTPFrontend) decodeURI(uri string) (protocol, address, port string) {
 	protocol, address, port = "https", uri, "443"
 
-	s := strings.Split(uri, ".")
+	s := strings.Split(uri, "-")
 	idx := 1
 
 	_, err := strconv.Atoi(s[len(s)-idx])
 	if err == nil {
 		port = s[len(s)-1]
-		address = strings.Replace(address, "."+port, "", -1)
+		address = strings.Replace(address, "-"+port, "", -1)
 		idx++
 	}
 
 	if s[len(s)-idx] == "http" {
 		protocol = "http"
-		address = strings.Replace(address, ".http", "", -1)
+		address = strings.Replace(address, "-http", "", -1)
+	} else if s[len(s)-idx] == "https" {
+		protocol = "https"
+		address = strings.Replace(address, "-https", "", -1)
 	}
 
-	return protocol, address, port
+	return protocol, strings.Replace(address, "-", ".", -1), port
 }
 
 // encodeURI Encode a URI for the http proxy
