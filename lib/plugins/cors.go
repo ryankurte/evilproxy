@@ -25,8 +25,9 @@ func NewCORSPlugin(value string) *CORSPlugin {
 	}
 }
 
-func (c *CORSPlugin) HandleResponse(r *http.Response) {
-	header := r.Header.Get(CORSHeaderKey)
-	log.Printf("CORS Plugin: rewriting header from %s to %s", header, c.value)
-	r.Header.Set(CORSHeaderKey, c.value)
+func (c *CORSPlugin) ProcessResponse(ctx interface{}, header http.Header, body string) (http.Header, string) {
+	value := header.Get(CORSHeaderKey)
+	log.Printf("CORS Plugin: rewriting header from %s to %s", value, c.value)
+	header.Set(CORSHeaderKey, c.value)
+	return header, body
 }

@@ -45,17 +45,18 @@ func (p *Proxy) HandleRequest(req *http.Request) (*http.Response, error) {
 
 	ctx := int(0)
 
-	// Process request headers
-	req.Header = p.plugins.ProcessRequestHeader(ctx, req.Header)
-
-	// Process request body if available
-	if req.Body != nil {
-		requestBody, err := ioutil.ReadAll(req.Body)
+	// Process request object
+	if req.Body == nil {
+		req.Header, _ = p.plugins.ProcessRequest(ctx, req.Header, "")
+	} else {
+		reqBody, err := ioutil.ReadAll(req.Body)
 		if err != nil {
 			log.Printf("Error loading request body: %s", err)
 		} else {
-			requestBody := p.plugins.ProcessRequestBody(ctx, string(requestBody))
-			req.Body = &ByteReadCloser{bytes.NewReader([]byte(requestBody))}
+			// Process request
+			reqHeader, reqBody := p.plugins.ProcessRequest(ctx, req.Header, string(reqBody))
+			req.Header = reqHeader
+			req.Body = &ByteReadCloser{bytes.NewReader([]byte(reqBody))}
 		}
 	}
 
@@ -66,17 +67,17 @@ func (p *Proxy) HandleRequest(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	// Process response headers
-	resp.Header = p.plugins.ProcessResponseHeader(ctx, resp.Header)
-
-	// Process response body if available
-	if resp.Body != nil {
-		responseBody, err := ioutil.ReadAll(resp.Body)
+	// Process response object
+	if resp.Body == nil {
+		resp.Header, _ = p.plugins.ProcessResponse(ctx, resp.Header, "")
+	} else {
+		respBody, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("Error loading response body: %s", err)
 		} else {
-			responseBody := p.plugins.ProcessResponseBody(ctx, string(responseBody))
-			resp.Body = &ByteReadCloser{bytes.NewReader([]byte(responseBody))}
+			respHeader, respBody := p.plugins.ProcessResponse(ctx, resp.Header, string(respBody))
+			resp.Header = respHeader
+			resp.Body = &ByteReadCloser{bytes.NewReader([]byte(respBody))}
 		}
 	}
 
