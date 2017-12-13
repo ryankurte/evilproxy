@@ -27,8 +27,9 @@ func main() {
 	p.BindBackend(&core.HTTPBackend{})
 
 	// Create the frontend
-	h, err := ingress.NewHTTPFrontend(o.Address, o.Port, o.CertFile, o.CertKey)
+	h, err := ingress.NewHTTPFrontend(o.Address, o.Port, o.CertFile, o.CertKey, o.CertDir)
 	if err != nil {
+		log.Printf("Error starting ingress: %s", err)
 		os.Exit(1)
 	}
 

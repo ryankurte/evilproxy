@@ -17,8 +17,7 @@ import (
 type BumpTLS struct {
 	mode   string
 	outDir string
-	crt    *x509.Certificate
-	key    *rsa.PrivateKey
+	ca     *BumpCert
 	certs  map[string]*BumpCert
 }
 
@@ -40,6 +39,18 @@ var certTemplate = x509.Certificate{
 	KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 	ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	BasicConstraintsValid: true,
+}
+
+var ConfigTemplate = tls.Config{
+	MinVersion:               tls.VersionTLS12,
+	CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
+	PreferServerCipherSuites: true,
+	CipherSuites: []uint16{
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+		tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+	},
 }
 
 // NewBumpTLS Creates a new BumpTLS instance
@@ -71,8 +82,12 @@ func NewBumpTLS(certFile, keyFile, outDir string) (*BumpTLS, error) {
 			return nil, err
 		}
 
-		b.crt = cert
-		b.key = key
+		b.ca = &BumpCert{
+			crt:     cert,
+			crtData: certData,
+			key:     key,
+			keyData: keyData,
+		}
 
 	} else {
 		c, err := b.initCA()
@@ -80,8 +95,17 @@ func NewBumpTLS(certFile, keyFile, outDir string) (*BumpTLS, error) {
 			return nil, err
 		}
 
-		b.crt = c.crt
-		b.key = c.key
+		err = ioutil.WriteFile(fmt.Sprintf("%s/%s", outDir, "ca.key"), c.keyData, 0644)
+		if err != nil {
+			return nil, err
+		}
+
+		err = ioutil.WriteFile(fmt.Sprintf("%s/%s", outDir, "ca.crt"), c.crtData, 0644)
+		if err != nil {
+			return nil, err
+		}
+
+		b.ca = c
 	}
 
 	return &b, nil
@@ -94,7 +118,7 @@ func (b *BumpTLS) GetConfigForClient(info *tls.ClientHelloInfo) (*tls.Config, er
 
 // GetConfigByName generates a configuration for the server the client is attempting to connect to
 func (b *BumpTLS) GetConfigByName(name string) (*tls.Config, error) {
-	cfg := tls.Config{}
+	cfg := ConfigTemplate.Clone()
 	var err error
 
 	serverName := strings.ToLower(name)
@@ -115,7 +139,7 @@ func (b *BumpTLS) GetConfigByName(name string) (*tls.Config, error) {
 
 	cfg.Certificates = []tls.Certificate{tlsCert}
 
-	return &cfg, nil
+	return cfg, nil
 }
 
 // initServer creates a certificate for the requested
@@ -151,10 +175,10 @@ func (b *BumpTLS) initCert(template *x509.Certificate) (*BumpCert, error) {
 	keyData := x509.MarshalPKCS1PrivateKey(key)
 
 	var crtData []byte
-	if b.key == nil || b.crt == nil {
+	if b.ca == nil {
 		crtData, err = x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
 	} else {
-		crtData, err = x509.CreateCertificate(rand.Reader, template, b.crt, key.Public(), b.key)
+		crtData, err = x509.CreateCertificate(rand.Reader, template, b.ca.crt, key.Public(), b.ca.key)
 	}
 	if err != nil {
 		log.Printf("BumpTLS error creating certificate: %s", err)
@@ -165,6 +189,10 @@ func (b *BumpTLS) initCert(template *x509.Certificate) (*BumpCert, error) {
 	if err != nil {
 		log.Printf("BumpTLS error parsing created certificate: %s", err)
 		return nil, err
+	}
+
+	if b.ca != nil {
+		crtData = append(crtData, b.ca.crtData...)
 	}
 
 	return &BumpCert{crt: crt, key: key, crtData: crtData, keyData: keyData}, nil

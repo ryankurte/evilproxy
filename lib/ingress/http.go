@@ -21,14 +21,14 @@ type HTTPFrontend struct {
 }
 
 // NewHTTPFrontend is an http frontend
-func NewHTTPFrontend(address, port, certFile, keyFile string) (*HTTPFrontend, error) {
+func NewHTTPFrontend(address, port, certFile, keyFile, certDir string) (*HTTPFrontend, error) {
 	h := HTTPFrontend{
 		address:     address,
 		port:        port,
 		bindAddress: fmt.Sprintf("%s:%s", address, port),
 	}
 
-	b, err := NewBumpTLS(certFile, keyFile, "")
+	b, err := NewBumpTLS(certFile, keyFile, certDir)
 	if err != nil {
 		return nil, err
 	}
@@ -145,13 +145,46 @@ func (h *HTTPFrontend) ConnStateListener(c net.Conn, cs http.ConnState) {
 	}
 }
 
+type SingleListener struct {
+	conn net.Conn
+	once sync.Once
+}
+
+func NewSingleListener(conn net.Conn) SingleListener {
+	sl := SingleListener{
+		conn: conn,
+		once: sync.Once{},
+	}
+	return sl
+}
+
+func (sl *SingleListener) Accept() (net.Conn, error) {
+	var c net.Conn
+	sl.once.Do(func() {
+		c = sl.conn
+	})
+	if c != nil {
+		return c, nil
+	}
+	return nil, io.EOF
+}
+
+func (sl *SingleListener) Close() error {
+	sl.once.Do(func() {
+		sl.conn.Close()
+	})
+	return nil
+}
+
+func (sl *SingleListener) Addr() net.Addr {
+	return sl.conn.LocalAddr()
+}
+
 func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 
-	connPtr := writerToConnPtr(w)
-
-	conn, ok := conns[connPtr]
+	hj, ok := w.(http.Hijacker)
 	if !ok {
-		log.Printf("CONNECT error: no matching connection found")
+		http.Error(w, "webserver doesn't support hijacking", http.StatusInternalServerError)
 		return
 	}
 
@@ -161,15 +194,19 @@ func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tlsConn := tls.Server(conn, config)
-
-	connMutex.Lock()
-	conns[connPtr] = tlsConn
-	connMutex.Unlock()
-
 	w.WriteHeader(http.StatusOK)
 
-	tlsConn.Handshake()
+	conn, _, err := hj.Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	listener := NewSingleListener(conn)
+
+	tlsListener := tls.NewListener(&listener, config)
+
+	go h.srv.Serve(tlsListener)
 }
 
 func (h *HTTPFrontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -181,22 +218,19 @@ func (h *HTTPFrontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type MyListener struct {
-	net.Listener
-}
-
-type MyConn struct {
-	net.Conn
-}
+// openssl s_client -connect localhost:9001 -debug
+// curl --proxy http://localhost:9001 https://google.com -iv
 
 func (h *HTTPFrontend) Run() {
+
+	tlsConfig := ConfigTemplate.Clone()
+	tlsConfig.GetConfigForClient = h.bumpTLS.GetConfigForClient
+
 	srv := &http.Server{
 		Addr:      h.bindAddress,
 		Handler:   h,
-		ConnState: h.ConnStateListener,
-		TLSConfig: &tls.Config{
-			GetConfigForClient: h.bumpTLS.GetConfigForClient,
-		}}
+		TLSConfig: tlsConfig,
+	}
 
 	log.Printf("Starting evilproxy at: http://%s", h.bindAddress)
 
