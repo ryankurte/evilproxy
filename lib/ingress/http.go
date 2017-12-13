@@ -1,10 +1,14 @@
 package ingress
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"reflect"
+	"sync"
 )
 
 // HTTPFrontend is a http subdomain based re-mapping proxy
@@ -13,18 +17,27 @@ type HTTPFrontend struct {
 	address, port string
 	bindAddress   string
 	srv           *http.Server
+	bumpTLS       *BumpTLS
 }
 
 // NewHTTPFrontend is an http frontend
-func NewHTTPFrontend(address, port, cert, key string) *HTTPFrontend {
+func NewHTTPFrontend(address, port, certFile, keyFile string) (*HTTPFrontend, error) {
 	h := HTTPFrontend{
 		address:     address,
 		port:        port,
 		bindAddress: fmt.Sprintf("%s:%s", address, port),
 	}
-	return &h
+
+	b, err := NewBumpTLS(certFile, keyFile, "")
+	if err != nil {
+		return nil, err
+	}
+	h.bumpTLS = b
+
+	return &h, nil
 }
 
+// BindProxy binds the underlying proxy to the frontend
 func (h *HTTPFrontend) BindProxy(p Proxy) {
 	h.Proxy = p
 }
@@ -32,8 +45,6 @@ func (h *HTTPFrontend) BindProxy(p Proxy) {
 // wrapRequest modifies the underlying request
 func (h *HTTPFrontend) wrapRequest(req *http.Request) (*http.Request, error) {
 	queryURI, host := req.RequestURI, req.Host
-
-	//queryURI = strings.Replace(queryURI, "http://", "https://", -1)
 
 	log.Printf("Query: %s Host: %s", queryURI, host)
 
@@ -86,22 +97,106 @@ func (h *HTTPFrontend) handler(wr http.ResponseWriter, req *http.Request) {
 	resp.Body.Close()
 }
 
-func (h *HTTPFrontend) initTLS(w http.ResponseWriter, r *http.Request) {
+var conns = make(map[uintptr]net.Conn)
+var connMutex = sync.Mutex{}
 
+// writerToConnPrt converts an http.ResponseWriter to a pointer for indexing
+func writerToConnPtr(w http.ResponseWriter) uintptr {
+	ptrVal := reflect.ValueOf(w)
+	val := reflect.Indirect(ptrVal)
+
+	// http.conn
+	valconn := val.FieldByName("conn")
+	val1 := reflect.Indirect(valconn)
+
+	// net.TCPConn
+	ptrRwc := val1.FieldByName("rwc").Elem()
+	rwc := reflect.Indirect(ptrRwc)
+
+	// net.Conn
+	val1conn := rwc.FieldByName("conn")
+	val2 := reflect.Indirect(val1conn)
+
+	return val2.Addr().Pointer()
+}
+
+// connToPtr converts a net.Conn into a pointer for indexing
+func connToPtr(c net.Conn) uintptr {
+	ptrVal := reflect.ValueOf(c)
+	return ptrVal.Pointer()
+}
+
+// ConnStateListener bound to server and maintains a list of connections by pointer
+func (h *HTTPFrontend) ConnStateListener(c net.Conn, cs http.ConnState) {
+	connPtr := connToPtr(c)
+
+	// Bind new
+	switch cs {
+	case http.StateNew:
+		log.Printf("CONN Opened: 0x%x\n", connPtr)
+		connMutex.Lock()
+		conns[connPtr] = c
+		connMutex.Unlock()
+	case http.StateClosed:
+		log.Printf("CONN Closed: 0x%x\n", connPtr)
+		connMutex.Lock()
+		delete(conns, connPtr)
+		connMutex.Unlock()
+	}
+}
+
+func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
+
+	connPtr := writerToConnPtr(w)
+
+	conn, ok := conns[connPtr]
+	if !ok {
+		log.Printf("CONNECT error: no matching connection found")
+		return
+	}
+
+	config, err := h.bumpTLS.GetConfigByName(r.Host)
+	if err != nil {
+		log.Printf("CONNECT error getting bumpTLS config: %s", err)
+		return
+	}
+
+	tlsConn := tls.Server(conn, config)
+
+	connMutex.Lock()
+	conns[connPtr] = tlsConn
+	connMutex.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+
+	tlsConn.Handshake()
 }
 
 func (h *HTTPFrontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodConnect:
-		log.Printf("Connect")
+		h.handleConnect(w, r)
 	default:
 		h.handler(w, r)
 	}
+}
 
+type MyListener struct {
+	net.Listener
+}
+
+type MyConn struct {
+	net.Conn
 }
 
 func (h *HTTPFrontend) Run() {
-	srv := &http.Server{Addr: h.bindAddress, Handler: h}
+	srv := &http.Server{
+		Addr:      h.bindAddress,
+		Handler:   h,
+		ConnState: h.ConnStateListener,
+		TLSConfig: &tls.Config{
+			GetConfigForClient: h.bumpTLS.GetConfigForClient,
+		}}
 
 	log.Printf("Starting evilproxy at: http://%s", h.bindAddress)
 

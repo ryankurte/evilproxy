@@ -27,7 +27,10 @@ func main() {
 	p.BindBackend(&core.HTTPBackend{})
 
 	// Create the frontend
-	h := ingress.NewHTTPFrontend(o.Address, o.Port, o.CertFile, o.CertKey)
+	h, err := ingress.NewHTTPFrontend(o.Address, o.Port, o.CertFile, o.CertKey)
+	if err != nil {
+		os.Exit(1)
+	}
 
 	// Bind the proxy instance to the frontend
 	h.BindProxy(p)

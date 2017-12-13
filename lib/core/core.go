@@ -33,6 +33,7 @@ func NewProxy(options Options) *Proxy {
 		options: options,
 		plugins: plugins.PluginManager{},
 	}
+
 	return &p
 }
 
