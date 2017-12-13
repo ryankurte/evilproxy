@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"reflect"
 	"sync"
 )
 
@@ -97,54 +96,6 @@ func (h *HTTPFrontend) handler(wr http.ResponseWriter, req *http.Request) {
 	resp.Body.Close()
 }
 
-var conns = make(map[uintptr]net.Conn)
-var connMutex = sync.Mutex{}
-
-// writerToConnPrt converts an http.ResponseWriter to a pointer for indexing
-func writerToConnPtr(w http.ResponseWriter) uintptr {
-	ptrVal := reflect.ValueOf(w)
-	val := reflect.Indirect(ptrVal)
-
-	// http.conn
-	valconn := val.FieldByName("conn")
-	val1 := reflect.Indirect(valconn)
-
-	// net.TCPConn
-	ptrRwc := val1.FieldByName("rwc").Elem()
-	rwc := reflect.Indirect(ptrRwc)
-
-	// net.Conn
-	val1conn := rwc.FieldByName("conn")
-	val2 := reflect.Indirect(val1conn)
-
-	return val2.Addr().Pointer()
-}
-
-// connToPtr converts a net.Conn into a pointer for indexing
-func connToPtr(c net.Conn) uintptr {
-	ptrVal := reflect.ValueOf(c)
-	return ptrVal.Pointer()
-}
-
-// ConnStateListener bound to server and maintains a list of connections by pointer
-func (h *HTTPFrontend) ConnStateListener(c net.Conn, cs http.ConnState) {
-	connPtr := connToPtr(c)
-
-	// Bind new
-	switch cs {
-	case http.StateNew:
-		log.Printf("CONN Opened: 0x%x\n", connPtr)
-		connMutex.Lock()
-		conns[connPtr] = c
-		connMutex.Unlock()
-	case http.StateClosed:
-		log.Printf("CONN Closed: 0x%x\n", connPtr)
-		connMutex.Lock()
-		delete(conns, connPtr)
-		connMutex.Unlock()
-	}
-}
-
 type SingleListener struct {
 	conn net.Conn
 	once sync.Once
@@ -184,12 +135,13 @@ func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		http.Error(w, "webserver doesn't support hijacking", http.StatusInternalServerError)
+		http.Error(w, "CONNECT webserver doesn't support hijacking", http.StatusInternalServerError)
 		return
 	}
 
 	config, err := h.bumpTLS.GetConfigByName(r.Host)
 	if err != nil {
+		http.Error(w, "CONNECT error getting bumpTLS config", http.StatusInternalServerError)
 		log.Printf("CONNECT error getting bumpTLS config: %s", err)
 		return
 	}
@@ -203,6 +155,8 @@ func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	listener := NewSingleListener(conn)
+
+	log.Printf("COnfig: %+v", config)
 
 	tlsListener := tls.NewListener(&listener, config)
 

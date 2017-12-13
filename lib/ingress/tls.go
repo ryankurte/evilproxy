@@ -1,11 +1,13 @@
 package ingress
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -136,6 +138,10 @@ func (b *BumpTLS) GetConfigByName(name string) (*tls.Config, error) {
 	}
 
 	tlsCert, err := tls.X509KeyPair(cert.crtData, cert.keyData)
+	if err != nil {
+		log.Printf("BumpTLS.GetConfigByName error: %s", err)
+		return nil, err
+	}
 
 	cfg.Certificates = []tls.Certificate{tlsCert}
 
@@ -172,28 +178,35 @@ func (b *BumpTLS) initCert(template *x509.Certificate) (*BumpCert, error) {
 		log.Printf("BumpTLS init error: %s", err)
 		return nil, err
 	}
-	keyData := x509.MarshalPKCS1PrivateKey(key)
+	keyDer := x509.MarshalPKCS1PrivateKey(key)
 
-	var crtData []byte
+	var crtDer []byte
 	if b.ca == nil {
-		crtData, err = x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
+		crtDer, err = x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
 	} else {
-		crtData, err = x509.CreateCertificate(rand.Reader, template, b.ca.crt, key.Public(), b.ca.key)
+		crtDer, err = x509.CreateCertificate(rand.Reader, template, b.ca.crt, key.Public(), b.ca.key)
 	}
 	if err != nil {
 		log.Printf("BumpTLS error creating certificate: %s", err)
 		return nil, err
 	}
 
-	crt, err := x509.ParseCertificate(crtData)
+	certPem := bytes.NewBuffer(nil)
+	pem.Encode(certPem, &pem.Block{Type: "CERTIFICATE", Bytes: crtDer})
+
+	keyPem := bytes.NewBuffer(nil)
+	pem.Encode(keyPem, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyDer})
+
+	crt, err := x509.ParseCertificate(crtDer)
 	if err != nil {
 		log.Printf("BumpTLS error parsing created certificate: %s", err)
 		return nil, err
 	}
 
 	if b.ca != nil {
-		crtData = append(crtData, b.ca.crtData...)
+		//crtData = append(crtData, b.ca.crtData...)
+		certPem.Write(b.ca.crtData)
 	}
 
-	return &BumpCert{crt: crt, key: key, crtData: crtData, keyData: keyData}, nil
+	return &BumpCert{crt: crt, key: key, crtData: certPem.Bytes(), keyData: keyPem.Bytes()}, nil
 }
