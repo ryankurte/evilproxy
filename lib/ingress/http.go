@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -45,7 +46,17 @@ func (h *HTTPFrontend) BindProxy(p Proxy) {
 func (h *HTTPFrontend) wrapRequest(req *http.Request) (*http.Request, error) {
 	queryURI, host := req.RequestURI, req.Host
 
-	log.Printf("Query: %s Host: %s", queryURI, host)
+	if !strings.Contains(queryURI, host) {
+		queryURI = host + queryURI
+	}
+
+	if req.TLS != nil && !strings.HasPrefix(queryURI, "https://") {
+		queryURI = "https://" + queryURI
+	} else if req.TLS == nil && !strings.HasPrefix(queryURI, "http://") {
+		queryURI = "http://" + queryURI
+	}
+
+	log.Printf("Request URI: %s", queryURI)
 
 	if req.Body == nil {
 		return http.NewRequest(req.Method, queryURI, nil)
@@ -139,7 +150,7 @@ func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := h.bumpTLS.GetConfigByName(r.Host)
+	config, err := h.bumpTLS.GetConfigByName(r.URL.Hostname())
 	if err != nil {
 		http.Error(w, "CONNECT error getting bumpTLS config", http.StatusInternalServerError)
 		log.Printf("CONNECT error getting bumpTLS config: %s", err)
@@ -150,13 +161,12 @@ func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	conn, _, err := hj.Hijack()
 	if err != nil {
+		log.Printf("CONNECT error hijacking connection: %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	listener := NewSingleListener(conn)
-
-	log.Printf("COnfig: %+v", config)
 
 	tlsListener := tls.NewListener(&listener, config)
 

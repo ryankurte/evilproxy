@@ -12,6 +12,9 @@ import (
 	"io/ioutil"
 	"log"
 	"math/big"
+	rnd "math/rand"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -31,14 +34,16 @@ type BumpCert struct {
 }
 
 var certTemplate = x509.Certificate{
-	SerialNumber: big.NewInt(0),
+	SerialNumber: big.NewInt(rnd.Int63()),
 	Subject: pkix.Name{
-		Organization: []string{"☭ EvilProxy (evpx) ☭"},
+		CommonName:         "EvilProxy (evpx) TLS Interception Proxy",
+		Organization:       []string{"EvilCorp"},
+		OrganizationalUnit: []string{"Research"},
 	},
 	NotBefore: time.Now(),
-	NotAfter:  time.Now().Add(time.Hour * 24),
+	NotAfter:  time.Now().Add(time.Hour * 24 * 365),
 
-	KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+	KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageKeyAgreement,
 	ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	BasicConstraintsValid: true,
 }
@@ -62,47 +67,49 @@ func NewBumpTLS(certFile, keyFile, outDir string) (*BumpTLS, error) {
 		certs:  make(map[string]*BumpCert),
 	}
 
+	// Check if default exists
+	if certFile == "" && keyFile == "" {
+		cert := fmt.Sprintf("%s/%s", outDir, "ca.crt")
+		key := fmt.Sprintf("%s/%s", outDir, "ca.key")
+
+		_, err1 := os.Stat(cert)
+		_, err2 := os.Stat(key)
+
+		if err1 == nil && err2 == nil {
+			certFile = cert
+			keyFile = key
+		}
+	}
+
+	// Load existing CA if files are specified
 	if certFile != "" && keyFile != "" {
-		tls.LoadX509KeyPair(certFile, keyFile)
-		certData, err := ioutil.ReadFile(certFile)
+		log.Printf("Loading existing CA (reading cert: %s, key: %s)", certFile, keyFile)
+
+		ca, err := b.loadBumpCert(certFile, keyFile)
 		if err != nil {
+			log.Printf("BumpTLS error loading CA (%s)", err)
 			return nil, err
 		}
 
-		cert, err := x509.ParseCertificate(certData)
-		if err != nil {
-			return nil, err
-		}
+		b.ca = ca
 
-		keyData, err := ioutil.ReadFile(keyFile)
-		if err != nil {
-			return nil, err
-		}
-
-		key, err := x509.ParsePKCS1PrivateKey(keyData)
-		if err != nil {
-			return nil, err
-		}
-
-		b.ca = &BumpCert{
-			crt:     cert,
-			crtData: certData,
-			key:     key,
-			keyData: keyData,
-		}
+		b.loadCerts(outDir)
 
 	} else {
+		certFile, keyFile = fmt.Sprintf("%s/%s", outDir, "ca.crt"), fmt.Sprintf("%s/%s", outDir, "ca.key")
+		log.Printf("Generating new CA (writing cert: %s, key: %s)", certFile, keyFile)
+
 		c, err := b.initCA()
 		if err != nil {
 			return nil, err
 		}
 
-		err = ioutil.WriteFile(fmt.Sprintf("%s/%s", outDir, "ca.key"), c.keyData, 0644)
+		err = ioutil.WriteFile(keyFile, c.keyData, 0644)
 		if err != nil {
 			return nil, err
 		}
 
-		err = ioutil.WriteFile(fmt.Sprintf("%s/%s", outDir, "ca.crt"), c.crtData, 0644)
+		err = ioutil.WriteFile(certFile, c.crtData, 0644)
 		if err != nil {
 			return nil, err
 		}
@@ -111,6 +118,78 @@ func NewBumpTLS(certFile, keyFile, outDir string) (*BumpTLS, error) {
 	}
 
 	return &b, nil
+}
+
+func (b *BumpTLS) loadBumpCert(certFile, keyFile string) (*BumpCert, error) {
+	certPEM, err := ioutil.ReadFile(certFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var certDERBlock *pem.Block
+	certPEMBlock := certPEM
+	for {
+		certDERBlock, certPEMBlock = pem.Decode(certPEMBlock)
+		if certDERBlock.Type == "CERTIFICATE" {
+			break
+		}
+		if certDERBlock == nil && len(certPEM) == 0 {
+			break
+		}
+	}
+
+	cert, err := x509.ParseCertificate(certDERBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	keyPEM, err := ioutil.ReadFile(keyFile)
+	if err != nil {
+		return nil, err
+	}
+	keyDERBlock, _ := pem.Decode(keyPEM)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := x509.ParsePKCS1PrivateKey(keyDERBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return &BumpCert{
+		crt:     cert,
+		crtData: certPEM,
+		key:     key,
+		keyData: keyPEM,
+	}, nil
+}
+
+func (b *BumpTLS) loadCerts(dir string) error {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name(), ".crt") {
+			continue
+		}
+
+		name := strings.TrimSuffix(f.Name(), ".crt")
+		certFile := dir + "/" + name + ".crt"
+		keyFile := dir + "/" + name + ".key"
+
+		cert, err := b.loadBumpCert(certFile, keyFile)
+		if err != nil {
+			log.Printf("Error loading cert %s", err)
+			continue
+		}
+
+		b.certs[name] = cert
+	}
+
+	return nil
 }
 
 // GetConfigForClient generates a configuration for the server the client is attempting to connect to
@@ -124,12 +203,25 @@ func (b *BumpTLS) GetConfigByName(name string) (*tls.Config, error) {
 	var err error
 
 	serverName := strings.ToLower(name)
-	log.Printf("BumpTLS.GetConfigByName for server: %s", serverName)
+
+	certFile, keyFile := fmt.Sprintf("%s/%s.crt", b.outDir, serverName), fmt.Sprintf("%s/%s.key", b.outDir, serverName)
 
 	// Load existing certificate if found
 	cert, ok := b.certs[serverName]
 	if !ok {
+		log.Printf("BumpTLS.GetConfigByName generating certificate for server: %s", serverName)
+
 		cert, err = b.initServer(name)
+		if err != nil {
+			return nil, err
+		}
+
+		err = ioutil.WriteFile(keyFile, cert.keyData, 0644)
+		if err != nil {
+			return nil, err
+		}
+
+		err = ioutil.WriteFile(certFile, cert.crtData, 0644)
 		if err != nil {
 			return nil, err
 		}
@@ -152,6 +244,28 @@ func (b *BumpTLS) GetConfigByName(name string) (*tls.Config, error) {
 func (b *BumpTLS) initServer(name string) (*BumpCert, error) {
 	template := certTemplate
 	template.DNSNames = []string{name}
+	template.Issuer = b.ca.crt.Subject
+
+	req, err := http.DefaultClient.Get(fmt.Sprintf("https://%s", name))
+	if err != nil {
+		log.Printf("BumpTLS.initServer error: %s", err)
+		return nil, err
+	}
+
+	if req.TLS != nil && len(req.TLS.PeerCertificates) > 1 {
+		peer := req.TLS.PeerCertificates[0]
+
+		log.Printf("Peer: %s", peer.Subject.CommonName)
+		template.DNSNames = peer.DNSNames
+		template.SerialNumber = big.NewInt(rnd.Int63())
+		template.Subject = peer.Subject
+		template.NotBefore = peer.NotBefore
+		template.NotAfter = peer.NotAfter
+		template.KeyUsage = peer.KeyUsage
+		template.ExtKeyUsage = peer.ExtKeyUsage
+		template.BasicConstraintsValid = peer.BasicConstraintsValid
+		template.IPAddresses = peer.IPAddresses
+	}
 
 	return b.initCert(&template)
 }
@@ -161,7 +275,7 @@ func (b *BumpTLS) initCA() (*BumpCert, error) {
 	template := certTemplate
 
 	template.IsCA = true
-	template.KeyUsage |= x509.KeyUsageCertSign
+	template.KeyUsage |= x509.KeyUsageCertSign | x509.KeyUsageCRLSign
 
 	return b.initCert(&template)
 }

@@ -10,7 +10,7 @@ import (
 
 	"github.com/ryankurte/experiments/evilproxy/lib/core"
 	"github.com/ryankurte/experiments/evilproxy/lib/ingress"
-	//"github.com/ryankurte/experiments/evilproxy/lib/plugins"
+	"github.com/ryankurte/experiments/evilproxy/lib/plugins"
 )
 
 func main() {
@@ -18,7 +18,10 @@ func main() {
 
 	// Parse proxy options
 	o := core.Options{}
-	flags.Parse(&o)
+	_, err := flags.Parse(&o)
+	if err != nil {
+		os.Exit(0)
+	}
 
 	// Create the core proxy instance
 	p := core.NewProxy(o)
@@ -27,7 +30,7 @@ func main() {
 	p.BindBackend(&core.HTTPBackend{})
 
 	// Create the frontend
-	h, err := ingress.NewHTTPFrontend(o.Address, o.Port, o.CertFile, o.CertKey, o.CertDir)
+	h, err := ingress.NewHTTPFrontend(o.Address, o.Port, o.CACert, o.CAKey, o.CertDir)
 	if err != nil {
 		log.Printf("Error starting ingress: %s", err)
 		os.Exit(1)
@@ -37,7 +40,7 @@ func main() {
 	h.BindProxy(p)
 
 	// Bind enabled plugins
-	//p.Bind(plugins.NewCORSPlugin("*"))
+	p.BindPlugin(plugins.NewHSTS())
 
 	// Run the frontend
 	go h.Run()

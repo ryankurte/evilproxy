@@ -41,6 +41,10 @@ func (p *Proxy) BindBackend(b Backend) {
 	p.backend = b
 }
 
+func (p *Proxy) BindPlugin(h interface{}) {
+	p.plugins.Bind(h)
+}
+
 // HandleRequest routes a request through the proxy and returns a response
 func (p *Proxy) HandleRequest(req *http.Request) (*http.Response, error) {
 
