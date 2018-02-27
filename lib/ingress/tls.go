@@ -81,6 +81,10 @@ func NewBumpTLS(certFile, keyFile, outDir string) (*BumpTLS, error) {
 		}
 	}
 
+	if _, err := os.Stat(outDir); os.IsNotExist(err) {
+		os.Mkdir(outDir, 755)
+	}
+
 	// Load existing CA if files are specified
 	if certFile != "" && keyFile != "" {
 		log.Printf("Loading existing CA (reading cert: %s, key: %s)", certFile, keyFile)

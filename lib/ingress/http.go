@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-// HTTPFrontend is a http subdomain based re-mapping proxy
+// HTTPFrontend is a http proxy based frontend with bump-tls support
 type HTTPFrontend struct {
 	Proxy
 	address, port string
@@ -20,7 +20,7 @@ type HTTPFrontend struct {
 	bumpTLS       *BumpTLS
 }
 
-// NewHTTPFrontend is an http frontend
+// NewHTTPFrontend creates a new HTTP frontend
 func NewHTTPFrontend(address, port, certFile, keyFile, certDir string) (*HTTPFrontend, error) {
 	h := HTTPFrontend{
 		address:     address,
@@ -37,12 +37,13 @@ func NewHTTPFrontend(address, port, certFile, keyFile, certDir string) (*HTTPFro
 	return &h, nil
 }
 
-// BindProxy binds the underlying proxy to the frontend
+// BindProxy binds the underlying proxy core to the frontend
 func (h *HTTPFrontend) BindProxy(p Proxy) {
 	h.Proxy = p
 }
 
-// wrapRequest modifies the underlying request
+// wrapRequest modifies the incoming request to meet core proxy requirements
+// ie. have a viable query string and body
 func (h *HTTPFrontend) wrapRequest(req *http.Request) (*http.Request, error) {
 	queryURI, host := req.RequestURI, req.Host
 
@@ -65,12 +66,14 @@ func (h *HTTPFrontend) wrapRequest(req *http.Request) (*http.Request, error) {
 	return http.NewRequest(req.Method, queryURI, req.Body)
 }
 
+// wrapResponse modifies the outgoing response as is expected by the client
+// TODO: probably should wrap request/response to provide contexts and reset queryURIs
 func (h *HTTPFrontend) wrapResponse(resp *http.Response) (*http.Response, error) {
 	return resp, nil
 }
 
+// handler is the incoming request handler
 func (h *HTTPFrontend) handler(wr http.ResponseWriter, req *http.Request) {
-
 	// Wrap request object for from frontend to backend format
 	proxyReq, err := h.wrapRequest(req)
 	if err != nil {
@@ -107,20 +110,19 @@ func (h *HTTPFrontend) handler(wr http.ResponseWriter, req *http.Request) {
 	resp.Body.Close()
 }
 
-type SingleListener struct {
+type singleListener struct {
 	conn net.Conn
 	once sync.Once
 }
 
-func NewSingleListener(conn net.Conn) SingleListener {
-	sl := SingleListener{
+func newSingleListener(conn net.Conn) singleListener {
+	return singleListener{
 		conn: conn,
 		once: sync.Once{},
 	}
-	return sl
 }
 
-func (sl *SingleListener) Accept() (net.Conn, error) {
+func (sl *singleListener) Accept() (net.Conn, error) {
 	var c net.Conn
 	sl.once.Do(func() {
 		c = sl.conn
@@ -131,25 +133,28 @@ func (sl *SingleListener) Accept() (net.Conn, error) {
 	return nil, io.EOF
 }
 
-func (sl *SingleListener) Close() error {
+func (sl *singleListener) Close() error {
 	sl.once.Do(func() {
 		sl.conn.Close()
 	})
 	return nil
 }
 
-func (sl *SingleListener) Addr() net.Addr {
+func (sl *singleListener) Addr() net.Addr {
 	return sl.conn.LocalAddr()
 }
 
+// handleConnect handles the TCP CONNECT method to provide fake TLS termination
 func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 
+	// Check that http response connection is hijackable and fetch hijacker
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "CONNECT webserver doesn't support hijacking", http.StatusInternalServerError)
 		return
 	}
 
+	// Fetch a TLS configuration
 	config, err := h.bumpTLS.GetConfigByName(r.URL.Hostname())
 	if err != nil {
 		http.Error(w, "CONNECT error getting bumpTLS config", http.StatusInternalServerError)
@@ -157,8 +162,10 @@ func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Write an http 200 (causes the browser to
 	w.WriteHeader(http.StatusOK)
 
+	// Hijack the underlying connection from the http response object
 	conn, _, err := hj.Hijack()
 	if err != nil {
 		log.Printf("CONNECT error hijacking connection: %s", err)
@@ -166,13 +173,17 @@ func (h *HTTPFrontend) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	listener := NewSingleListener(conn)
+	// Build a single listener to bind the connection instance to the request
+	listener := newSingleListener(conn)
 
+	// Create a TLS listener with the generated TLS configuration
 	tlsListener := tls.NewListener(&listener, config)
 
+	// Hand off request to the new TLS listener (in a new process so we can continue accepting requests)
 	go h.srv.Serve(tlsListener)
 }
 
+// ServeHTTP wraps the underlying proxy handler and provides bump-tls magic
 func (h *HTTPFrontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodConnect:
@@ -185,6 +196,7 @@ func (h *HTTPFrontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // openssl s_client -connect localhost:9001 -debug
 // curl --proxy http://localhost:9001 https://google.com -iv
 
+// Run launches the http frontend
 func (h *HTTPFrontend) Run() {
 
 	tlsConfig := ConfigTemplate.Clone()
@@ -212,6 +224,7 @@ func (h *HTTPFrontend) Run() {
 	h.srv = srv
 }
 
+// Stop shuts down the http frontend
 func (h *HTTPFrontend) Stop() {
 	h.srv.Shutdown(nil)
 }

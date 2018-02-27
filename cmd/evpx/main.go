@@ -13,8 +13,10 @@ import (
 	"github.com/ryankurte/evilproxy/lib/plugins"
 )
 
+var version = "undefined"
+
 func main() {
-	log.Printf("☭ EvilProxy (evpx) ☭")
+	log.Printf("☭ EvilProxy (version: %s) ☭", version)
 
 	// Parse proxy options
 	o := core.Options{}
@@ -40,7 +42,15 @@ func main() {
 	h.BindProxy(p)
 
 	// Bind enabled plugins
-	p.BindPlugin(plugins.NewHSTS())
+	if o.BlockAll || o.BlockHSTS {
+		p.BindPlugin(plugins.NewHSTS())
+	}
+	if o.BlockAll || o.BlockCORS {
+		p.BindPlugin(plugins.NewCORS("*"))
+	}
+	if o.BlockAll || o.BlockSRI {
+		p.BindPlugin(plugins.NewSRI())
+	}
 
 	// Run the frontend
 	go h.Run()

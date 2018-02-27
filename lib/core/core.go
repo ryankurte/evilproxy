@@ -2,7 +2,6 @@ package core
 
 import (
 	"bytes"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -17,15 +16,10 @@ type Proxy struct {
 	plugins plugins.PluginManager
 }
 
+// Backend interface for underlying request implementations
 type Backend interface {
 	Request(ctx interface{}, req *http.Request) (*http.Response, error)
 }
-
-type ByteReadCloser struct {
-	io.Reader
-}
-
-func (b *ByteReadCloser) Close() error { return nil }
 
 // NewProxy creates a new proxy with the provided options
 func NewProxy(options Options) *Proxy {
@@ -37,10 +31,12 @@ func NewProxy(options Options) *Proxy {
 	return &p
 }
 
+// BindBackend binds a backend interface for making real requests
 func (p *Proxy) BindBackend(b Backend) {
 	p.backend = b
 }
 
+// BindPlugin binds a plugin for processing requests and/or responses
 func (p *Proxy) BindPlugin(h interface{}) {
 	p.plugins.Bind(h)
 }
@@ -61,7 +57,7 @@ func (p *Proxy) HandleRequest(req *http.Request) (*http.Response, error) {
 			// Process request
 			reqHeader, reqBody := p.plugins.ProcessRequest(ctx, req.Header, string(reqBody))
 			req.Header = reqHeader
-			req.Body = &ByteReadCloser{bytes.NewReader([]byte(reqBody))}
+			req.Body = ioutil.NopCloser(bytes.NewReader([]byte(reqBody)))
 		}
 	}
 
@@ -82,7 +78,7 @@ func (p *Proxy) HandleRequest(req *http.Request) (*http.Response, error) {
 		} else {
 			respHeader, respBody := p.plugins.ProcessResponse(ctx, resp.Header, string(respBody))
 			resp.Header = respHeader
-			resp.Body = &ByteReadCloser{bytes.NewReader([]byte(respBody))}
+			resp.Body = ioutil.NopCloser(bytes.NewReader([]byte(respBody)))
 		}
 	}
 
