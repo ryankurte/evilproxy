@@ -7,24 +7,29 @@
 package plugins
 
 import (
+	"net/http"
 	"regexp"
 )
 
 const (
-	SHA256 = "sha256"
-	SHA384 = "sha384"
-	SHA512 = "sha512"
+	sha256 = "sha256"
+	sha384 = "sha384"
+	sha512 = "sha512"
 )
 
 var sriExp = regexp.MustCompile(`(integrity\=\"[a-z0-9A-Z\-\+\/]+"[\n\r\s]*)`)
 
-type SRIPlugin struct {
+// SRI plugin strips SRI tags from http response bodies
+type SRI struct {
 }
 
-func NewSRIPlugin() *SRIPlugin {
-	return &SRIPlugin{}
+// NewSRI creates a new instance of the SRI strip plugin
+func NewSRI() *SRI {
+	return &SRI{}
 }
 
-func (s *SRIPlugin) HandleResponseBody(body []byte) []byte {
-	return sriExp.ReplaceAll(body, []byte{})
+// ProcessResponse removes HSTS headers from a proxied response
+func (s *SRI) ProcessResponse(ctx interface{}, header http.Header, body string) (http.Header, string) {
+	body = string(sriExp.ReplaceAll([]byte(body), []byte{}))
+	return header, body
 }

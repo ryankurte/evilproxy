@@ -7,7 +7,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/ryankurte/experiments/evilproxy/lib/plugins"
+	"github.com/ryankurte/evilproxy/lib/plugins"
 )
 
 // Proxy core object

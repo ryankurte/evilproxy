@@ -8,9 +8,9 @@ import (
 
 	"github.com/jessevdk/go-flags"
 
-	"github.com/ryankurte/experiments/evilproxy/lib/core"
-	"github.com/ryankurte/experiments/evilproxy/lib/ingress"
-	"github.com/ryankurte/experiments/evilproxy/lib/plugins"
+	"github.com/ryankurte/evilproxy/lib/core"
+	"github.com/ryankurte/evilproxy/lib/ingress"
+	"github.com/ryankurte/evilproxy/lib/plugins"
 )
 
 func main() {

@@ -7,27 +7,38 @@
 package plugins
 
 import (
-	"log"
 	"net/http"
 )
 
 const (
-	CORSHeaderKey = "Access-Control-Allow-Origin"
+	corsHeaderKey = "Access-Control-Allow-Origin"
 )
 
-type CORSPlugin struct {
+// CORS plugin strips (or replaces) Cross Origin Resource Sharing (CORS) headers
+type CORS struct {
+	base
 	value string
 }
 
-func NewCORSPlugin(value string) *CORSPlugin {
-	return &CORSPlugin{
+// NewCORS creates a new instance of the CORS plugin
+func NewCORS(value string) *CORS {
+	return &CORS{
+		base:  newBase("cors"),
 		value: value,
 	}
 }
 
-func (c *CORSPlugin) ProcessResponse(ctx interface{}, header http.Header, body string) (http.Header, string) {
-	value := header.Get(CORSHeaderKey)
-	log.Printf("CORS Plugin: rewriting header from %s to %s", value, c.value)
-	header.Set(CORSHeaderKey, c.value)
+// ProcessResponse strips CORS headers from proxied responses
+func (c *CORS) ProcessResponse(ctx interface{}, header http.Header, body string) (http.Header, string) {
+	v := header.Get(corsHeaderKey)
+	if v != "" {
+		c.WithField(corsHeaderKey, v).Printf("rewriting header")
+		if c.value != "" {
+			header.Set(corsHeaderKey, c.value)
+		} else {
+			header.Del(corsHeaderKey)
+		}
+	}
+
 	return header, body
 }
